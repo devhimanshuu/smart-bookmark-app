@@ -9,13 +9,21 @@ import {
     Globe,
     Search,
     Inbox,
-    ArrowUpRight
+    ArrowUpRight,
+    Pin,
+    Tag as TagIcon
 } from 'lucide-react'
+
+import DeleteModal from '@/ui/deleteModal'
 
 interface Bookmark {
     id: string
     title: string
     url: string
+    description?: string
+    image_url?: string
+    tags?: string[]
+    is_pinned: boolean
     created_at: string
 }
 
@@ -27,6 +35,11 @@ export default function BookmarkList({ userId }: BookmarkListProps) {
     const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
     const [loading, setLoading] = useState(true)
     const [searchTerm, setSearchTerm] = useState('')
+    const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean, bookmarkId: string, title: string }>({
+        isOpen: false,
+        bookmarkId: '',
+        title: ''
+    })
 
     useEffect(() => {
         fetchBookmarks()
@@ -43,17 +56,34 @@ export default function BookmarkList({ userId }: BookmarkListProps) {
                 },
                 (payload) => {
                     if (payload.eventType === 'INSERT') {
-                        setBookmarks((current) => [payload.new as Bookmark, ...current])
+                        const newBookmark = payload.new as Bookmark;
+                        setBookmarks((current) => {
+                            const updated = [newBookmark, ...current];
+                            // Re-sort to keep pinned items at top
+                            return updated.sort((a, b) => {
+                                if (a.is_pinned === b.is_pinned) {
+                                    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+                                }
+                                return a.is_pinned ? -1 : 1;
+                            });
+                        });
                     } else if (payload.eventType === 'DELETE') {
                         setBookmarks((current) =>
-                            current.filter((bookmark) => bookmark.id !== payload.old.id)
-                        )
+                            current.filter((b) => b.id !== payload.old.id)
+                        );
                     } else if (payload.eventType === 'UPDATE') {
-                        setBookmarks((current) =>
-                            current.map((bookmark) =>
-                                bookmark.id === payload.new.id ? (payload.new as Bookmark) : bookmark
-                            )
-                        )
+                        const updatedBookmark = payload.new as Bookmark;
+                        setBookmarks((current) => {
+                            const updated = current.map((b) =>
+                                b.id === updatedBookmark.id ? updatedBookmark : b
+                            );
+                            return updated.sort((a, b) => {
+                                if (a.is_pinned === b.is_pinned) {
+                                    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+                                }
+                                return a.is_pinned ? -1 : 1;
+                            });
+                        });
                     }
                 }
             )
@@ -70,6 +100,7 @@ export default function BookmarkList({ userId }: BookmarkListProps) {
                 .from('bookmarks')
                 .select('*')
                 .eq('user_id', userId)
+                .order('is_pinned', { ascending: false })
                 .order('created_at', { ascending: false })
 
             if (error) throw error
@@ -81,9 +112,14 @@ export default function BookmarkList({ userId }: BookmarkListProps) {
         }
     }
 
-    const handleDelete = async (id: string, e: React.MouseEvent) => {
+    const handleDelete = (id: string, title: string, e: React.MouseEvent) => {
         e.preventDefault()
         e.stopPropagation()
+        setDeleteModal({ isOpen: true, bookmarkId: id, title })
+    }
+
+    const confirmDelete = async () => {
+        const id = deleteModal.bookmarkId
         try {
             const { error } = await supabase.from('bookmarks').delete().eq('id', id)
             if (error) throw error
@@ -92,9 +128,24 @@ export default function BookmarkList({ userId }: BookmarkListProps) {
         }
     }
 
+    const togglePin = async (id: string, currentStatus: boolean, e: React.MouseEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        try {
+            const { error } = await supabase
+                .from('bookmarks')
+                .update({ is_pinned: !currentStatus })
+                .eq('id', id)
+            if (error) throw error
+        } catch (error: any) {
+            console.error('Error pinning bookmark:', error.message)
+        }
+    }
+
     const filteredBookmarks = bookmarks.filter(b =>
         b.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        b.url.toLowerCase().includes(searchTerm.toLowerCase())
+        b.url.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        b.tags?.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase()))
     )
 
     if (loading) {
@@ -102,12 +153,13 @@ export default function BookmarkList({ userId }: BookmarkListProps) {
             <div className="grid gap-6">
                 {[1, 2, 3].map((i) => (
                     <div key={i} className="bg-white p-8 rounded-[2rem] border border-slate-50 animate-pulse">
-                        <div className="flex justify-between items-start mb-4">
-                            <div className="space-y-3 w-2/3">
-                                <div className="h-6 bg-slate-100 rounded-lg w-full"></div>
+                        <div className="flex gap-6">
+                            <div className="w-24 h-24 bg-slate-100 rounded-2xl flex-shrink-0"></div>
+                            <div className="flex-1 space-y-3">
+                                <div className="h-6 bg-slate-100 rounded-lg w-1/3"></div>
+                                <div className="h-4 bg-slate-50 rounded-lg w-full"></div>
                                 <div className="h-4 bg-slate-50 rounded-lg w-1/2"></div>
                             </div>
-                            <div className="w-10 h-10 bg-slate-100 rounded-xl"></div>
                         </div>
                     </div>
                 ))}
@@ -117,12 +169,11 @@ export default function BookmarkList({ userId }: BookmarkListProps) {
 
     return (
         <div className="space-y-8">
-            {/* Search Bar */}
             <div className="relative group">
                 <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300 group-focus-within:text-primary-500 transition-colors" />
                 <input
                     type="text"
-                    placeholder="Search your library..."
+                    placeholder="Search titles, URLs or #tags..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="w-full pl-14 pr-6 py-5 bg-white border border-slate-100 rounded-3xl shadow-sm focus:ring-4 focus:ring-primary-500/5 focus:border-primary-500/50 outline-none transition-all text-slate-600 font-medium"
@@ -135,10 +186,10 @@ export default function BookmarkList({ userId }: BookmarkListProps) {
                         <Inbox className="w-10 h-10" />
                     </div>
                     <h3 className="text-xl font-black text-slate-900">
-                        {searchTerm ? 'No results found' : 'Empty Archive'}
+                        {searchTerm ? 'No matches' : 'Empty Archive'}
                     </h3>
-                    <p className="text-slate-400 mt-2 max-w-xs mx-auto">
-                        {searchTerm ? "We couldn't find anything matching your search." : "Your digital library is waiting for its first entry."}
+                    <p className="text-slate-400 mt-2 max-w-xs mx-auto text-sm">
+                        {searchTerm ? "Try searching for a different keyword or tag." : "Your visual digital library starts here."}
                     </p>
                 </div>
             ) : (
@@ -149,43 +200,79 @@ export default function BookmarkList({ userId }: BookmarkListProps) {
                             href={bookmark.url.startsWith('http') ? bookmark.url : `https://${bookmark.url}`}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="group bg-white p-8 rounded-[2rem] border border-slate-100 hover:border-primary-200 hover:shadow-[0_20px_50px_rgba(14,165,233,0.1)] transition-all duration-500 flex items-center justify-between overflow-hidden relative"
+                            className={`group bg-white p-6 rounded-[2.5rem] border transition-all duration-500 flex flex-col sm:flex-row gap-6 overflow-hidden relative ${bookmark.is_pinned
+                                ? 'border-primary-200 shadow-[0_20px_50px_rgba(14,165,233,0.08)] bg-primary-50/10'
+                                : 'border-slate-100 hover:border-primary-100 hover:shadow-[0_20px_50px_rgba(14,165,233,0.05)]'
+                                }`}
                         >
-                            <div className="flex-1 min-w-0 pr-6 relative z-10">
-                                <div className="flex items-center gap-3 mb-2">
-                                    <h3 className="text-xl font-black text-slate-900 truncate group-hover:text-primary-600 transition-colors">
+                            {/* Thumbnail */}
+                            <div className="w-full sm:w-40 h-28 bg-slate-50 rounded-2xl flex-shrink-0 overflow-hidden border border-slate-100 relative group-hover:border-primary-200 transition-colors">
+                                {bookmark.image_url ? (
+                                    <img src={bookmark.image_url} alt="" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" />
+                                ) : (
+                                    <div className="w-full h-full flex items-center justify-center text-slate-200">
+                                        <Globe className="w-10 h-10" />
+                                    </div>
+                                )}
+                                {bookmark.is_pinned && (
+                                    <div className="absolute top-2 left-2 bg-primary-500 text-white p-1.5 rounded-lg shadow-lg">
+                                        <Pin className="w-3 h-3 fill-current" />
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="flex-1 min-w-0 flex flex-col justify-center relative z-10">
+                                <div className="flex items-start justify-between gap-2 mb-1">
+                                    <h3 className="text-lg font-black text-slate-900 truncate group-hover:text-primary-600 transition-colors leading-tight">
                                         {bookmark.title}
                                     </h3>
-                                    <ArrowUpRight className="w-4 h-4 text-slate-300 group-hover:text-primary-400 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all" />
+                                    <ArrowUpRight className="w-4 h-4 text-slate-300 group-hover:text-primary-400 flex-shrink-0" />
                                 </div>
 
-                                <div className="flex flex-wrap items-center gap-4">
+                                {bookmark.description && (
+                                    <p className="text-slate-500 text-sm line-clamp-1 mb-3 font-medium">
+                                        {bookmark.description}
+                                    </p>
+                                )}
+
+                                <div className="flex flex-wrap items-center gap-3">
                                     <div className="flex items-center gap-1.5 text-slate-400">
-                                        <Globe className="w-3.5 h-3.5" />
-                                        <span className="text-xs font-bold uppercase tracking-widest truncate max-w-[200px]">
-                                            {bookmark.url.replace(/^https?:\/\//, '')}
+                                        <span className="text-[10px] font-bold uppercase tracking-widest truncate max-w-[150px]">
+                                            {bookmark.url.replace(/^https?:\/\//, '').split('/')[0]}
                                         </span>
                                     </div>
-                                    <div className="flex items-center gap-1.5 text-slate-300">
-                                        <Clock className="w-3.5 h-3.5" />
-                                        <span className="text-[10px] font-bold uppercase tracking-tighter">
-                                            {new Date(bookmark.created_at).toLocaleDateString()}
-                                        </span>
-                                    </div>
+
+                                    {bookmark.tags && bookmark.tags.length > 0 && (
+                                        <div className="flex items-center gap-2">
+                                            {bookmark.tags.slice(0, 3).map(tag => (
+                                                <span key={tag} className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded-md text-[9px] font-black uppercase tracking-tighter flex items-center gap-1">
+                                                    <TagIcon className="w-2 h-2" />
+                                                    {tag}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
-                            <div className="relative z-10 flex items-center gap-3">
+                            <div className="flex items-center gap-2 sm:self-center">
                                 <button
-                                    onClick={(e) => handleDelete(bookmark.id, e)}
-                                    className="p-4 bg-slate-50 text-slate-400 rounded-2xl hover:bg-red-50 hover:text-red-500 transition-all duration-300 opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100"
-                                    title="Delete bookmark"
+                                    onClick={(e) => togglePin(bookmark.id, bookmark.is_pinned, e)}
+                                    className={`p-3 rounded-2xl transition-all duration-300 ${bookmark.is_pinned
+                                        ? 'bg-primary-500 text-white scale-100 shadow-lg shadow-primary-200'
+                                        : 'bg-slate-50 text-slate-400 hover:bg-primary-50 hover:text-primary-500 opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100'
+                                        }`}
+                                    title={bookmark.is_pinned ? "Unpin" : "Pin to top"}
                                 >
-                                    <Trash2 className="w-5 h-5" />
+                                    <Pin className={`w-4 h-4 ${bookmark.is_pinned ? 'fill-current' : ''}`} />
                                 </button>
-                                <div className="hidden sm:flex p-4 bg-primary-50 text-primary-600 rounded-2xl opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100 transition-all duration-300 delay-75">
-                                    <ExternalLink className="w-5 h-5" />
-                                </div>
+                                <button
+                                    onClick={(e) => handleDelete(bookmark.id, bookmark.title, e)}
+                                    className="p-3 bg-slate-50 text-slate-400 rounded-2xl hover:bg-red-50 hover:text-red-500 transition-all duration-300 opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100"
+                                    title="Delete"
+                                >
+                                    <Trash2 className="w-4 h-4" />
+                                </button>
                             </div>
 
                             {/* Decorative background element on hover */}
@@ -194,6 +281,13 @@ export default function BookmarkList({ userId }: BookmarkListProps) {
                     ))}
                 </div>
             )}
+
+            <DeleteModal 
+                isOpen={deleteModal.isOpen}
+                onClose={() => setDeleteModal(prev => ({ ...prev, isOpen: false }))}
+                onConfirm={confirmDelete}
+                title={deleteModal.title}
+            />
         </div>
     )
 }
